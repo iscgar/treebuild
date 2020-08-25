@@ -19,7 +19,6 @@ impl DependencyTree {
             .arg("-e=no-dev")
             .arg("--prefix")
             .arg("depth")
-            .arg("--no-dedupe")
             .current_dir(path)
             .output()
             .expect("Cargo tree failed");
@@ -28,19 +27,39 @@ impl DependencyTree {
 
         let mut map = HashMap::new();
         let mut stack = Vec::<String>::new();
+        let mut roots = vec![];
 
         for line in output.lines() {
+            if line.len() == 0 {
+                // This is a workspace with multiple projects and the empty line
+                // is the projects separator
+                stack.truncate(1);
+                stack.pop().map(|root| roots.push(root));
+                continue;
+            }
+
             let start = line.find(|c: char| !c.is_ascii_digit()).unwrap();
             let (depth, line) = line.split_at(start);
             let depth = depth.parse::<usize>().unwrap();
 
+            if depth > stack.len() {
+                continue;
+            }
+
             let dep = crate_name_from_package_id(line);
+
+            if stack.is_empty() && map.contains_key(&dep) {
+                // Don't waste time going down that project tree since it's already in the map
+                roots.push(dep);
+                continue;
+            }
 
             while depth < stack.len() {
                 stack.pop();
             }
 
             if stack.contains(&dep) {
+                // Avoid a cycle by pretending that this dependency doesn't exist
                 continue;
             }
 
@@ -59,12 +78,26 @@ impl DependencyTree {
         }
 
         stack.truncate(1);
-        assert!(!stack.is_empty());
+        stack.pop().map(|root| roots.push(root));
 
-        DependencyTree {
-            root: stack.pop().unwrap(),
-            nodes: map,
-        }
+        assert!(!roots.is_empty());
+
+        let root = if roots.len() > 1 {
+            // Add a root "workspace" node in case we have multiple roots
+            let root = "workspace".to_string();
+            map.insert(
+                root.clone(),
+                TreeNode {
+                    name: root.clone(),
+                    children: roots.drain(..).collect(),
+                },
+            );
+            root
+        } else {
+            roots.pop().unwrap()
+        };
+
+        DependencyTree { root, nodes: map }
     }
 
     pub fn get(&self, name: &str) -> Option<Dependency> {
