@@ -13,7 +13,7 @@ struct TreeNode {
 }
 
 impl DependencyTree {
-    pub fn new(path: &Path) -> DependencyTree {
+    pub fn new(path: &Path) -> Result<DependencyTree, (i32, String)> {
         let output = Command::new("cargo")
             .arg("tree")
             .arg("-e=no-dev")
@@ -22,6 +22,13 @@ impl DependencyTree {
             .current_dir(path)
             .output()
             .expect("Cargo tree failed");
+
+        if !output.status.success() {
+            return Err((
+                output.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            ));
+        }
 
         let output = String::from_utf8_lossy(&output.stdout);
 
@@ -97,7 +104,7 @@ impl DependencyTree {
             roots.pop().unwrap()
         };
 
-        DependencyTree { root, nodes: map }
+        Ok(DependencyTree { root, nodes: map })
     }
 
     pub fn get(&self, name: &str) -> Option<Dependency> {

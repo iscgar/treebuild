@@ -31,7 +31,13 @@ lazy_static! {
 
 pub fn launch(cargo_command: Vec<&'static str>, prefix: &'static str) {
     let (sender, receiver) = channel();
-    let parsed_tree = DependencyTree::new(Path::new("."));
+    let parsed_tree = match DependencyTree::new(Path::new(".")) {
+        Ok(parsed_tree) => parsed_tree,
+        Err((exit_code, error)) => {
+            eprint!("{}", error);
+            std::process::exit(exit_code);
+        }
+    };
 
     let thread = thread::spawn(move || {
         let build_args: Vec<_> = cargo_command
