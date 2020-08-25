@@ -11,7 +11,8 @@ pub type Color = Rgb<u8>;
 #[derive(Copy, Clone)]
 pub struct Point(pub f32, pub f32);
 
-const COMPLETED_TASK_COLOR: (u8, u8, u8) = (0x98, 0xfb, 0x98);
+const COMPLETED_TASK_FILL: (u8, u8, u8) = (0x98, 0xfb, 0x98);
+const COMPLETED_TASK_STROKE: (u8, u8, u8) = (0x00, 0x80, 0x00);
 
 enum DrawStage {
     Line {
@@ -222,16 +223,23 @@ pub(crate) fn draw_deps<'a>(
                 color,
                 name,
             } => {
-                let color = if completed_tasks.contains(&name) {
-                    COMPLETED_TASK_COLOR.into()
+                let (fill, stroke) = if completed_tasks.contains(&name) {
+                    (COMPLETED_TASK_FILL.into(), COMPLETED_TASK_STROKE.into())
                 } else if active_tasks.contains(&name) {
-                    color_transition(color, COMPLETED_TASK_COLOR.into(), transition)
+                    let color = color_transition(color, COMPLETED_TASK_FILL.into(), transition);
+                    (color, COMPLETED_TASK_FILL.into())
                 } else {
-                    color
+                    (color, color)
                 };
 
                 draw.ellipse()
-                    .color(srgba(color.red, color.green, color.blue, 127))
+                    .color(srgba(fill.red, fill.green, fill.blue, 127))
+                    .stroke(srgba(stroke.red, stroke.green, stroke.blue, 127))
+                    .stroke_weight(if radius < 4.0 || fill == stroke {
+                        0.0
+                    } else {
+                        3.0
+                    })
                     .x_y(center.0, center.1)
                     .w_h(radius * 2.0, radius * 2.0);
 
