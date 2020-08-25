@@ -22,6 +22,7 @@ use drawing::{draw_deps, find_dep_by_pos, Phase, Point, Transition};
 enum CargoTask {
     Active(String),
     Completed(String),
+    Finished,
 }
 
 lazy_static! {
@@ -30,7 +31,6 @@ lazy_static! {
 }
 
 pub fn launch(cargo_command: Vec<&'static str>, prefix: &'static str) {
-    let (sender, receiver) = channel();
     let parsed_tree = match DependencyTree::new(Path::new(".")) {
         Ok(parsed_tree) => parsed_tree,
         Err((exit_code, error)) => {
@@ -39,7 +39,8 @@ pub fn launch(cargo_command: Vec<&'static str>, prefix: &'static str) {
         }
     };
 
-    let thread = thread::spawn(move || {
+    let (sender, receiver) = channel();
+    let build_thread = thread::spawn(move || {
         let build_args: Vec<_> = cargo_command
             .iter()
             .map(|x| x.to_string())
@@ -104,14 +105,24 @@ pub fn launch(cargo_command: Vec<&'static str>, prefix: &'static str) {
         }
 
         let _ = stdout_reader.join();
+        sender
+            .send(CargoTask::Finished)
+            .expect("Failed to send finalisation to channel");
     });
 
     COMPLETED_RECEIVER
         .lock()
         .expect("Failed to take the receiver lock")
-        .replace((thread, receiver, parsed_tree));
+        .replace((build_thread, receiver, parsed_tree));
 
-    nannou::app(model).update(update).run();
+    nannou::app(model)
+        .update(update)
+        .exit(|_app, model| {
+            // Need to use an exit function because the event loop calls std::process:exit()
+            // FIXME: The window isn't destroyed at this point, so we just have a frozen UI
+            let _ = model.build_thread.join();
+        })
+        .run();
 }
 
 struct Model {
@@ -120,7 +131,7 @@ struct Model {
     active_tree: Option<String>,
     active_tasks: HashSet<String>,
     completed_tasks: HashSet<String>,
-    sender_thread: Option<JoinHandle<()>>,
+    build_thread: JoinHandle<()>,
     tasks_receiver: std::sync::mpsc::Receiver<CargoTask>,
 }
 
@@ -136,7 +147,7 @@ impl Model {
 fn model(app: &App) -> Model {
     app.new_window().event(event).view(view).build().unwrap();
 
-    let (sender_thread, tasks_receiver, parsed_tree) = COMPLETED_RECEIVER
+    let (build_thread, tasks_receiver, parsed_tree) = COMPLETED_RECEIVER
         .lock()
         .expect("Failed to take receiver lock")
         .take()
@@ -148,7 +159,7 @@ fn model(app: &App) -> Model {
         active_tree: None,
         active_tasks: HashSet::new(),
         completed_tasks: HashSet::new(),
-        sender_thread: Some(sender_thread),
+        build_thread,
         tasks_receiver,
     }
 }
@@ -162,6 +173,9 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
             CargoTask::Completed(task) => {
                 model.active_tasks.remove(&task);
                 model.completed_tasks.insert(task);
+            }
+            CargoTask::Finished => {
+                // TODO: Close the window if a second passed since last user interaction
             }
         }
     }
@@ -187,10 +201,6 @@ fn event(app: &App, model: &mut Model, event: WindowEvent) {
         // Touch events
         Touch(_touch) => {}
         TouchPressure(_pressure) => {}
-
-        Closed => {
-            model.sender_thread.take().map(|thread| thread.join());
-        }
 
         _ => {}
     }
